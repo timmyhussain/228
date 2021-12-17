@@ -148,7 +148,7 @@ class Grid:
         self.obstacles = obstacles
         # self.reset()
         # self.create_map()
-        # self.set_goal()
+        self.set_goal()
         # self.set_initial_position()
         pass
     
@@ -289,15 +289,21 @@ class Grid:
     
     def compute_reward(self, belief, yaw, step, obstacles=False):
         current_error = get_error(belief, *self.goal_ix)
-        state_reward = 1*np.exp(0.05*-current_error)
+        # state_reward = 10*np.exp(0.05*-current_error)
+        state_reward = -10*(current_error - 10)
+        obstacle_reward = 10
+        done = False
         if obstacles:
             new_position = self.propagate_belief(self.position_grid, yaw, step)
+            # print(new_position)
             if np.sum(new_position) == 0:
-                collision_cost = -1
-                return 0, True
+                obstacle_reward = 0 #previously -1
+                done = True
+                # return -1, True
             elif  (new_position == self.goal_grid).all():
-                return 10, True
-        return state_reward, False
+                state_reward = 10
+                done = True #previously 10
+        return state_reward, obstacle_reward, done
         
         
         
@@ -314,10 +320,10 @@ class Grid:
     def step(self, belief, action):
         yaw, step = self.action_dict[action]
         next_state = self.propagate_belief(belief, yaw, step)
-        obstacles = self.get_obstacles(next_state)
+        state_reward, obstacle_reward, done = self.compute_reward(belief, yaw, step, obstacles=True)   
         self.position_grid = self.propagate_belief(self.position_grid, yaw, step)
-        reward, done = self.compute_reward(belief, yaw, step)            
-        return next_state, obstacles, self.goal_ix, reward, done
+        obstacles = self.get_obstacles(self.position_grid)         
+        return next_state, obstacles, self.goal_ix, state_reward, obstacle_reward, done
         
     
     def reset(self):
@@ -349,29 +355,44 @@ class Model:
         obstacle_input = keras.Input(shape=(8,), name="obstacles")
         goal_input = keras.Input(shape=(2,), name="goal")
         
-        belief_features = layers.Dense(720, activation="relu")(belief_input)
-        belief_features = layers.Dense(720, activation="relu")(belief_features)
-        belief_features = layers.Dense(144, activation="relu")(belief_features)
-        
-        obstacle_features = layers.Dense(40, activation="relu")(obstacle_input)
-        obstacle_features = layers.Dense(40, activation="relu")(obstacle_features)
-        obstacle_features = layers.Dense(8, activation="relu")(obstacle_features)
-        
         goal_features = layers.Embedding(input_dim=(12), output_dim=1, input_length=2)(goal_input)
+        goal_features = layers.Dense(10, activation="relu")(goal_features)
         goal_features = layers.Flatten()(goal_features)
+
+        # belief_features = layers.Dense(1440, activation="relu")(belief_input)
+        belief_features = layers.Dense(720, activation="relu")(belief_input)
+        # belief_features = layers.Dense(144, activation="relu")(belief_features)
+        joint_features = layers.Concatenate()([belief_features, goal_features])
+        # joint_features = layers.Dense(1560, activation = "relu")(x)
+        # joint_features = layers.Dense(780, activation = "relu")(joint_features)
+
+
+        obstacle_features = layers.Dense(80, activation="relu")(obstacle_input)
+        # obstacle_features = layers.Dense(40, activation="relu")(obstacle_features)
+        # obstacle_features = layers.Dense(8, activation="relu")(obstacle_features)
+        # obstacle_features = layers.Flatten()(obstacle_input)
         
-        x = layers.concatenate([belief_features, obstacle_features, goal_features])
-        x = layers.Dense(300, activation="relu")(x)
+        # x = layers.concatenate([belief_finput, goal_features])
         
-        output = layers.Dense(9, activation="linear", name="actions")(x)
+        # x = layers.concatenate([belief_features, obstacle_features, goal_features])
+        # x = layers.Dense(300, activation="relu")(x)
+
+        obstacle_actions = layers.Dense(9, activation="linear", name="obstacle_actions")(obstacle_features)
+        
+        belief_actions = layers.Dense(9, activation="linear", name="belief_actions")(joint_features)
+        
+        # output = layers.Dense(9, activation="linear", name="actions")(x)
 
         self.model = keras.Model(
             inputs = [belief_input, obstacle_input, goal_input],
-            outputs=[output])
+            outputs=[obstacle_actions, belief_actions])
         
-        optimizer = keras.optimizers.Adam(lr=self.learning_rate)
+        optimizer = keras.optimizers.Adam(learning_rate=self.learning_rate)
 
-        loss = {"actions": keras.losses.MeanSquaredError()}#did ok with mse
+        # loss = {"belief": keras.losses.MeanSquaredError()}#did ok with mse
+
+        loss = {"obstacle_actions": keras.losses.MeanSquaredError(),
+                "belief_actions": keras.losses.MeanSquaredError()}#did ok with mse
         
         
         self.model.compile(optimizer=optimizer, loss=loss)#, metrics=metrics)
